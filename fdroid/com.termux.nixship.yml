@@ -1,0 +1,34 @@
+Categories:
+  - System
+  - Development
+License: GPL-3.0-or-later AND Apache-2.0
+SourceCode: https://github.com/imxade/nixship-android
+IssueTracker: https://github.com/imxade/nixship-android/issues
+
+Summary: Turn an ARM64 Android device into a self-contained Nix host
+Description: |-
+  Nix Ship turns an ARM64 Android device into a self-contained application host
+  and management client.
+
+  The APK includes a checksum-pinned Nix runtime and a CI-built Nix Ship control
+  plane. It starts the server in an Android foreground service, keeps state in
+  app-private storage, and opens the local dashboard in a hardened WebView. No
+  separately hosted Nix Ship backend is required.
+
+RepoType: git
+Repo: https://github.com/imxade/nixship-android.git
+
+Builds:
+  - versionName: 0.1.0-rc.19
+    versionCode: 19
+    commit: v0.1.0-rc.19
+    build:
+      - nix build .#default
+
+AntiFeatures:
+  - NonFreeNet
+
+AutoUpdateMode: Version v%v
+UpdateCheckMode: Tags
+CurrentVersion: 0.1.0-rc.19
+CurrentVersionCode: 19
