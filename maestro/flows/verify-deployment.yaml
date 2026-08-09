@@ -1,0 +1,22 @@
+appId: ${APP_ID}
+name: Verify the configured deployment and its Quick Tunnel
+---
+# A successful import returns to the Applications list. The status and public
+# URL are rendered on that card; "Application status" exists only on Manage.
+- extendedWaitUntil:
+    visible: ${ACCEPTANCE_APP_NAME}
+    timeout: 120000
+- extendedWaitUntil:
+    visible: "running"
+    timeout: ${DEPLOYMENT_TIMEOUT_MILLIS}
+- scrollUntilVisible:
+    element:
+      text: "Temporary public URL"
+    direction: DOWN
+    timeout: ${QUICK_TUNNEL_TIMEOUT_MILLIS}
+- tapOn:
+    text: "https://.*"
+    below: "Temporary public URL"
+- extendedWaitUntil:
+    visible: ${ACCEPTANCE_READY_TEXT}
+    timeout: ${ACCEPTANCE_READY_TIMEOUT_MILLIS}

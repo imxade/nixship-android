@@ -348,9 +348,9 @@ public final class TermuxConstants {
      */
 
     /** Termux app name */
-    public static final String TERMUX_APP_NAME = "Nix"; // Default: "Termux"
+    public static final String TERMUX_APP_NAME = "Nix Ship"; // Default: "Termux"
     /** Termux package name */
-    public static final String TERMUX_PACKAGE_NAME = "com.termux.nix"; // Default: "com.termux"
+    public static final String TERMUX_PACKAGE_NAME = "com.termux.nixship"; // Default: "com.termux"
     /** Termux Github repo name */
     public static final String TERMUX_GITHUB_REPO_NAME = "nix-on-droid-app"; // Default: "termux-app"
     /** Termux GitHub repo url */

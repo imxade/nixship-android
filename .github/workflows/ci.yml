@@ -1,0 +1,205 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime-arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Resolve latest control plane from master
+        run: |
+          nix shell nixpkgs#gitMinimal nixpkgs#jq nixpkgs#nix-prefetch-git \
+            -c scripts/update-control-plane.sh --skip-flake-check
+
+      - name: Build, test, and export the native ARM64 control plane
+        run: |
+          nix develop .#runtime-export --command \
+            scripts/export-control-plane-closure.sh runtime-artifact
+
+      - name: Preserve resolved configuration
+        run: |
+          mkdir -p resolved-config
+          cp config/product.json resolved-config/product.json
+
+      - name: Save verified ARM64 closure for downstream job
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime-artifact
+          key: nixship-ci-runtime-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: Save resolved configuration for downstream jobs
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: resolved-config
+          key: nixship-ci-config-${{ github.run_id }}-${{ github.run_attempt }}
+
+  test-and-build:
+    needs: runtime-arm64
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Reclaim space from unused hosted-runner toolchains
+        run: |
+          sudo rm -rf -- \
+            /opt/ghc \
+            /opt/hostedtoolcache \
+            /usr/local/lib/android \
+            /usr/share/dotnet
+          df -h /
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Restore resolved control-plane configuration
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: resolved-config
+          key: nixship-ci-config-${{ github.run_id }}-${{ github.run_attempt }}
+          fail-on-cache-miss: true
+
+      - name: Apply resolved control-plane configuration
+        run: cp resolved-config/product.json config/product.json
+
+      - name: Restore native ARM64 control-plane closure
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime-artifact
+          key: nixship-ci-runtime-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          fail-on-cache-miss: true
+
+      - name: Verify and import ARM64 closure
+        run: |
+          nix develop .#runtime-import --command \
+            scripts/import-control-plane-closure.sh runtime-artifact
+
+      - name: Validate flake and embedded runtime configuration
+        run: nix flake check --print-build-logs
+
+      - name: Check automation scripts
+        run: nix develop --command shellcheck scripts/*.sh
+
+      - name: Run Android unit tests and lint
+        run: nix develop --command gradle :app:testDebugUnitTest :app:lintDebug --no-daemon
+
+      - name: Validate the configured x86_64 acceptance workload
+        run: nix develop --command scripts/verify-acceptance-workload.sh
+
+      - name: Build hermetic release APK
+        run: nix build .#default --print-build-logs
+
+      - name: Verify APK package, ABI, alignment, and embedded provenance
+        run: |
+          apk="$(find -L result -type f -name '*.apk' -print -quit)"
+          nix develop --command scripts/verify-apk.sh "$apk"
+          install -Dm644 "$apk" dist/nixship-android-unsigned-arm64-v8a.apk
+          nix develop --command scripts/generate-sbom.sh \
+            "$apk" \
+            dist/nixship-android.cdx.json
+
+      - name: Save unsigned CI candidate
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            dist/nixship-android-unsigned-arm64-v8a.apk
+            dist/nixship-android.cdx.json
+          key: nixship-ci-unsigned-${{ github.run_id }}-${{ github.run_attempt }}
+
+  maestro-emulator:
+    needs: test-and-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Reclaim space from unused hosted-runner toolchains
+        run: |
+          sudo rm -rf -- \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/lib/android \
+            /usr/share/dotnet
+          df -h /
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Restore resolved control-plane configuration
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: resolved-config
+          key: nixship-ci-config-${{ github.run_id }}-${{ github.run_attempt }}
+          fail-on-cache-miss: true
+
+      - name: Apply resolved control-plane configuration
+        run: cp resolved-config/product.json config/product.json
+
+      - name: Build the bundled x86_64 acceptance APK
+        run: nix build .#emulator-apk --print-build-logs --out-link result-emulator
+
+      - name: Reclaim build-only Nix paths before emulator boot
+        run: |
+          nix develop --profile "$RUNNER_TEMP/nixship-emulator-shell" \
+            .#emulator --command true
+          nix-collect-garbage -d
+          df -h /
+
+      - name: Run the full Maestro emulator journey
+        env:
+          MAESTRO_ARTIFACTS: ${{ runner.temp }}/nixship-maestro-emulator
+        run: |
+          sudo chmod 0666 /dev/kvm
+          apk="$(find -L result-emulator -type f -name '*.apk' -print -quit)"
+          nix develop "$RUNNER_TEMP/nixship-emulator-shell" --command \
+            scripts/run-maestro-ci-emulator.sh "$apk"
+
+      - name: Save emulator acceptance evidence
+        id: upload-maestro-evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: maestro-emulator-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/nixship-maestro-emulator
+          if-no-files-found: error
+
+      - name: Preserve emulator evidence when artifact storage is unavailable
+        if: always() && steps.upload-maestro-evidence.outcome == 'failure'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nixship-maestro-emulator
+          key: nixship-ci-maestro-evidence-${{ github.run_id }}-${{ github.run_attempt }}

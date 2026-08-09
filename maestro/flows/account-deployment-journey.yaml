@@ -1,0 +1,107 @@
+appId: ${APP_ID}
+name: Nix Ship account and deployment journey from a ready server
+---
+- extendedWaitUntil:
+    visible: "Claim this Nix Ship"
+    timeout: ${STARTUP_TIMEOUT_MILLIS}
+- tapOn: "Owner username"
+- inputText: ${OWNER_USERNAME}
+- hideKeyboard
+- tapOn: "Password"
+- inputText: ${OWNER_PASSWORD}
+- hideKeyboard
+- tapOn: "Create owner account"
+- extendedWaitUntil:
+    visible: "Applications"
+    timeout: 120000
+
+# Prove the newly created account can sign out and authenticate again.
+- tapOn:
+    point: "10%,8%"
+- tapOn: "Sign out"
+- extendedWaitUntil:
+    visible: "Username"
+    timeout: 60000
+- tapOn: "Username"
+- inputText: ${OWNER_USERNAME}
+- hideKeyboard
+- tapOn: "Password"
+- inputText: ${OWNER_PASSWORD}
+- hideKeyboard
+- tapOn: "Sign in"
+- extendedWaitUntil:
+    visible: "Applications"
+    timeout: 120000
+
+# Change the owner password in the real dashboard UI.
+- tapOn:
+    point: "10%,8%"
+- tapOn: "Account"
+- tapOn:
+    point: "95%,50%"
+- extendedWaitUntil:
+    visible: "Change password"
+    timeout: 60000
+- scrollUntilVisible:
+    element:
+      text: "Current password"
+    direction: DOWN
+- tapOn: "Current password"
+- inputText: ${OWNER_PASSWORD}
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      text: "^New password$"
+    direction: DOWN
+- tapOn: "^New password$"
+- inputText: ${OWNER_NEW_PASSWORD}
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      text: "^Confirm new password$"
+    direction: DOWN
+- tapOn: "Confirm new password"
+- inputText: ${OWNER_NEW_PASSWORD}
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      text: "Change password"
+    direction: DOWN
+- tapOn:
+    text: "Change password"
+    index: 1
+    enabled: true
+- extendedWaitUntil:
+    visible: "Password changed. Other signed-in sessions were logged out."
+    timeout: 60000
+
+# Verify the old credential is rejected and the replacement credential works.
+- tapOn:
+    point: "10%,8%"
+- tapOn: "Sign out"
+- extendedWaitUntil:
+    visible: "Username"
+    timeout: 60000
+- tapOn: "Username"
+- inputText: ${OWNER_USERNAME}
+- hideKeyboard
+- tapOn: "Password"
+- inputText: ${OWNER_PASSWORD}
+- hideKeyboard
+- tapOn: "Sign in"
+- extendedWaitUntil:
+    visible: "Invalid username or password"
+    timeout: 60000
+- longPressOn: ${OWNER_PASSWORD}
+- tapOn: "Select all"
+- eraseText: 1
+- inputText: ${OWNER_NEW_PASSWORD}
+- hideKeyboard
+- tapOn: "Sign in"
+- extendedWaitUntil:
+    visible: "Applications"
+    timeout: 120000
+
+# Import and deploy the configured acceptance application.
+- tapOn: "Import repository"
+- runFlow: deploy-acceptance.yaml

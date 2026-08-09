@@ -1,0 +1,256 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_name:
+        description: "Android versionName (semver, e.g. 0.1.0-rc.15 or 0.1.0)"
+        required: true
+        type: string
+      version_code:
+        description: "Android versionCode (positive integer, must exceed every prior release)"
+        required: true
+        type: string
+      release_notes:
+        description: "Optional additional release notes (appended after auto-generated notes)"
+        required: false
+        type: string
+        default: ""
+      prerelease:
+        description: "Mark this as a prerelease (auto-detected from version_name if omitted)"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: "v${{ inputs.version_name }}"
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate inputs
+        run: |
+          version_name="${{ inputs.version_name }}"
+          version_code="${{ inputs.version_code }}"
+          if [[ ! "$version_name" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::version_name '$version_name' is not valid semver."
+            exit 1
+          fi
+          if [[ ! "$version_code" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::version_code '$version_code' must be a positive integer."
+            exit 1
+          fi
+
+      - name: Fail if tag already exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v${{ inputs.version_name }}"
+          if gh api "repos/${{ github.repository }}/git/refs/tags/$tag" --silent 2>/dev/null; then
+            echo "::error::Tag $tag already exists. Use a different version_name."
+            exit 1
+          fi
+          echo "Tag $tag is available."
+
+  runtime-arm64:
+    needs: preflight
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Resolve latest control plane and patch config
+        run: |
+          nix shell nixpkgs#gitMinimal nixpkgs#jq nixpkgs#nix-prefetch-git \
+            -c scripts/prepare-release.sh \
+            --version-name "${{ inputs.version_name }}" \
+            --version-code "${{ inputs.version_code }}" \
+            --skip-flake-check
+
+      - name: Build, test, and export the native ARM64 control plane
+        run: |
+          nix develop .#runtime-export --command \
+            scripts/export-control-plane-closure.sh runtime-artifact
+
+      - name: Preserve resolved configuration
+        run: |
+          cp config/product.json runtime-artifact/product.json
+          cp config/build-info.json runtime-artifact/build-info.json
+
+      - name: Save verified ARM64 closure for release job
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime-artifact
+          key: nixship-release-runtime-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+
+  release:
+    needs: runtime-arm64
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Reclaim space from unused hosted-runner toolchains
+        run: |
+          sudo rm -rf -- \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/lib/android \
+            /usr/share/dotnet
+          df -h /
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+
+      - name: Restore native ARM64 control-plane closure
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime-artifact
+          key: nixship-release-runtime-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          fail-on-cache-miss: true
+
+      - name: Restore resolved configuration
+        run: |
+          cp runtime-artifact/product.json config/product.json
+          cp runtime-artifact/build-info.json config/build-info.json
+          echo "Resolved control-plane revision:"
+          jq '.controlPlane.revision' config/product.json
+
+      - name: Verify and import ARM64 closure
+        run: |
+          nix develop .#runtime-import --command \
+            scripts/import-control-plane-closure.sh runtime-artifact
+
+      - name: Validate stable-release physical gate
+        if: ${{ !inputs.prerelease && !contains(inputs.version_name, '-') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t successful_run_ids < <(
+            gh run list \
+              --workflow physical.yml \
+              --commit "$GITHUB_SHA" \
+              --status completed \
+              --json conclusion,databaseId \
+              --jq '.[] | select(.conclusion == "success") | .databaseId'
+          )
+          if (( ${#successful_run_ids[@]} < 2 )); then
+            echo "Stable releases require two successful physical runs on this commit." >&2
+            exit 1
+          fi
+          evidence_root="$RUNNER_TEMP/physical-evidence"
+          mkdir -p "$evidence_root"
+          for run_id in "${successful_run_ids[@]}"; do
+            gh run download "$run_id" \
+              --pattern "physical-arm64-evidence-$GITHUB_SHA" \
+              --dir "$evidence_root/$run_id"
+          done
+          manufacturer_count="$(
+            find "$evidence_root" -name evidence.json -print0 |
+              xargs -0 -r jq -r '.device.manufacturer | ascii_downcase' |
+              sort -u |
+              awk 'NF { count++ } END { print count + 0 }'
+          )"
+          if (( manufacturer_count < 2 )); then
+            echo "Stable releases require physical evidence from two distinct manufacturers." >&2
+            exit 1
+          fi
+
+      - name: Validate and build
+        run: |
+          nix flake check --print-build-logs
+          nix build .#default --print-build-logs
+
+      - name: Sign release APK
+        env:
+          ANDROID_RELEASE_KEYSTORE_BASE64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_BASE64 }}
+          ANDROID_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          ANDROID_RELEASE_KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          ANDROID_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        run: |
+          unsigned_apk="$(find -L result -type f -name '*.apk' -print -quit)"
+          mkdir -p dist
+          nix develop --command scripts/sign-apk.sh \
+            "$unsigned_apk" \
+            "dist/nixship-android-${RELEASE_TAG}-arm64-v8a.apk"
+
+      - name: Generate checksums, SBOM, and provenance
+        run: |
+          apk="dist/nixship-android-${RELEASE_TAG}-arm64-v8a.apk"
+          sbom="dist/nixship-android-${RELEASE_TAG}.cdx.json"
+          nix develop --command scripts/generate-sbom.sh "$apk" "$sbom"
+          cp config/build-info.json dist/build-provenance.json
+          (
+            cd dist
+            sha256sum \
+              "nixship-android-${RELEASE_TAG}-arm64-v8a.apk" \
+              "nixship-android-${RELEASE_TAG}.cdx.json" \
+              build-provenance.json >SHA256SUMS
+          )
+
+      - name: Create tag and publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+          INPUT_VERSION_NAME: ${{ inputs.version_name }}
+          INPUT_RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          release_flags=()
+          # Auto-detect prerelease from version_name (contains hyphen) or explicit input.
+          if [[ "$INPUT_PRERELEASE" == "true" ]] || [[ "$INPUT_VERSION_NAME" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
+
+          # Build release notes body with provenance table.
+          cp_rev="$(jq -r '.controlPlane.revision' config/build-info.json)"
+          cp_hash="$(jq -r '.controlPlane.sourceHash' config/build-info.json)"
+          android_commit="$(jq -r '.android.commit' config/build-info.json)"
+          build_ts="$(jq -r '.buildTimestamp' config/build-info.json)"
+
+          notes_body="## Build Provenance
+          | Key | Value |
+          |-----|-------|
+          | Control-plane revision | \`$cp_rev\` |
+          | Control-plane source hash | \`$cp_hash\` |
+          | Android commit | \`$android_commit\` |
+          | Build timestamp | \`$build_ts\` |"
+
+          if [[ -n "$INPUT_RELEASE_NOTES" ]]; then
+            notes_body="$INPUT_RELEASE_NOTES
+
+          $notes_body"
+          fi
+
+          gh release create "$RELEASE_TAG" \
+            dist/nixship-android-"${RELEASE_TAG}"-arm64-v8a.apk \
+            dist/nixship-android-"${RELEASE_TAG}".cdx.json \
+            dist/build-provenance.json \
+            dist/SHA256SUMS \
+            --target "$GITHUB_SHA" \
+            --generate-notes \
+            --notes "$notes_body" \
+            --title "Nix Ship Android ${RELEASE_TAG}" \
+            "${release_flags[@]}"

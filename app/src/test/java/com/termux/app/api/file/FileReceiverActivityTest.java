@@ -6,11 +6,15 @@ import org.junit.Assert;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.annotation.Config;
 
 import java.util.ArrayList;
 import java.util.List;
 
 @RunWith(RobolectricTestRunner.class)
+// This test exercises a package-private URL classifier and does not depend on
+// Android 14+ behavior. Robolectric 4.10 supports framework SDKs through 33.
+@Config(sdk = 33)
 public class FileReceiverActivityTest {
 
     @Test

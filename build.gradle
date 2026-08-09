@@ -1,3 +1,7 @@
+import groovy.json.JsonSlurper
+
+def productConfig = new JsonSlurper().parse(file("config/product.json"))
+
 buildscript {
     repositories {
         mavenCentral()
@@ -9,6 +13,13 @@ buildscript {
 }
 
 allprojects {
+    ext {
+        minSdkVersion = productConfig.android.minSdk
+        targetSdkVersion = productConfig.android.targetSdk
+        compileSdkVersion = productConfig.android.compileSdk
+        ndkVersion = productConfig.android.ndkVersion
+    }
+
     repositories {
         google()
         mavenCentral()

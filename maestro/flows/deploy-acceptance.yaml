@@ -1,0 +1,45 @@
+appId: ${APP_ID}
+name: Deploy the configured acceptance application
+---
+# The import dialog can be taller than a phone viewport. Hide the keyboard and
+# scroll to each lower field before interacting with it.
+- extendedWaitUntil:
+    visible: "Import application"
+    timeout: 60000
+- tapOn: "Application name"
+- inputText: ${ACCEPTANCE_APP_NAME}
+- tapOn: "Public GitHub repository URL"
+- inputText: ${ACCEPTANCE_REPOSITORY_URL}
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      text: "Branch"
+    direction: DOWN
+- tapOn: "Branch"
+- inputText: ${ACCEPTANCE_BRANCH}
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      text: "Flake app output"
+    direction: DOWN
+- tapOn: "Flake app output"
+- longPressOn: "default"
+- tapOn: "Select all"
+- eraseText: 1
+- inputText: ${ACCEPTANCE_FLAKE_OUTPUT}
+- hideKeyboard
+- scrollUntilVisible:
+    element:
+      text: "Import and deploy"
+    direction: DOWN
+- tapOn: "Import and deploy"
+- runFlow:
+    when:
+      visible: "Import and deploy"
+    commands:
+      # A focused WebView input can consume the first coordinate tap while it
+      # commits composition. Maestro can retain the pre-scroll text bounds, so
+      # retry at the visible modal action position after the layout settles.
+      - tapOn:
+          point: "80%,93%"
+- runFlow: verify-deployment.yaml

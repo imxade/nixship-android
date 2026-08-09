@@ -1,13 +1,7 @@
-Termux is a terminal emulator application enhanced with a large set of command line utilities ported to Android OS. The main goal is to bring a Linux command line experience to users of mobile devices with no rooting or other special setup required.
+Nix Ship turns an ARM64 Android device into a self-contained application host and management client.
 
-* Enjoy the Bash and Zsh shells.
-* Edit files with nano and vim.
-* Access servers over SSH.
-* Compile C/C++ code with clang.
-* Use the Python console as a pocket calculator.
-* Check out projects with Git and Subversion.
-* Run text-based games with frotz.
+The APK includes a checksum-pinned Nix runtime and a CI-built Nix Ship control plane. It starts the server in an Android foreground service, keeps state in app-private storage, and opens the local dashboard in a hardened WebView. No separately hosted Nix Ship backend is required.
 
-At first start a small base system is being configured. The GNU Bash, Coreutils, Findutils and other core utilities are available out-of-box. Additionally, we provide more than 1000 other packages installable by using the 'pkg' utility which currently is a frontend for the 'apt' package manager. All provided software has been patched and compiled with Android NDK to provide max compatibility with Android OS.
+Create the owner account, sign in, change the password, deploy trusted flake repositories, access applications over the LAN, and optionally expose an application through a temporary Cloudflare Quick Tunnel.
 
-To learn more about application usage tips and tricks, long-press anywhere on the terminal and select the Help menu option to access Termux Wiki. This resource is also accessible directly in a web browser: https://wiki.termux.com/wiki/Main_Page.
+Nix Ship is intended for private sideloading. Android force-stop, OEM battery controls, device resource limits, and incompatible workload binaries remain device constraints.

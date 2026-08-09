@@ -2,17 +2,15 @@ package com.termux.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.app.ProgressDialog;
 import android.content.Context;
-import android.content.DialogInterface;
 import android.os.Build;
 import android.os.Environment;
 import android.system.Os;
 import android.util.Pair;
 import android.view.WindowManager;
-import android.widget.EditText;
 
 import com.termux.R;
+import com.termux.BuildConfig;
 import com.termux.shared.file.FileUtils;
 import com.termux.shared.termux.crash.TermuxCrashUtils;
 import com.termux.shared.termux.file.TermuxFileUtils;
@@ -27,12 +25,16 @@ import com.termux.shared.termux.shell.command.environment.TermuxShellEnvironment
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.net.MalformedURLException;
-import java.net.URL;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -48,13 +50,11 @@ import static com.termux.shared.termux.TermuxConstants.TERMUX_STAGING_PREFIX_DIR
  * (1) If $PREFIX already exist, assume that it is correct and be done. Note that this relies on that we do not create a
  * broken $PREFIX directory below.
  * <p/>
- * (2) A progress dialog is shown with "Installing..." message and a spinner.
+ * (2) A staging directory, $STAGING_PREFIX, is cleared if left over from broken installation below.
  * <p/>
- * (3) A staging directory, $STAGING_PREFIX, is cleared if left over from broken installation below.
+ * (3) The APK's ABI-specific, checksum-pinned bootstrap asset is opened.
  * <p/>
- * (4) The architecture is determined and an appropriate bootstrap zip url is determined in {@link #determineZipUrl()}.
- * <p/>
- * (5) The zip, containing entries relative to the $PREFIX, is is downloaded and extracted by a zip input stream
+ * (4) The zip, containing entries relative to the $PREFIX, is verified and extracted by a zip input stream
  * continuously encountering zip file entries:
  * <p/>
  * (5.1) If the zip entry encountered is SYMLINKS.txt, go through it and remember all symlinks to setup.
@@ -64,10 +64,21 @@ import static com.termux.shared.termux.TermuxConstants.TERMUX_STAGING_PREFIX_DIR
 final class TermuxInstaller {
 
     private static final String LOG_TAG = "TermuxInstaller";
-    static String defaultBootstrapURL = "https://nix-on-droid.unboiled.info/bootstrap-release-24.05";
-
     /** Performs bootstrap setup if necessary. */
     static void setupBootstrapIfNeeded(final Activity activity, final Runnable whenDone) {
+        setupBundledBootstrapIfNeeded(activity, whenDone);
+    }
+
+    /** Installs the release-pinned Nix-on-Droid bootstrap without accepting a user URL. */
+    static void setupPlatformBootstrapIfNeeded(final Activity activity, final Runnable whenDone) {
+        setupBundledBootstrapIfNeeded(activity, whenDone);
+    }
+
+    private static void setupBundledBootstrapIfNeeded(
+        final Activity activity,
+        final Runnable whenDone
+    ) {
+        PlatformDiagnostics.record(activity, "BOOTSTRAP", "Checking the pinned Nix-on-Droid runtime");
         String bootstrapErrorMessage;
         Error filesDirectoryAccessibleError;
 
@@ -112,6 +123,7 @@ final class TermuxInstaller {
             if (TermuxFileUtils.isTermuxPrefixDirectoryEmpty()) {
                 Logger.logInfo(LOG_TAG, "The termux prefix directory \"" + TERMUX_PREFIX_DIR_PATH + "\" exists but is empty or only contains specific unimportant files.");
             } else {
+                PlatformDiagnostics.record(activity, "BOOTSTRAP", "Existing Nix-on-Droid runtime found");
                 whenDone.run();
                 return;
             }
@@ -119,35 +131,24 @@ final class TermuxInstaller {
             Logger.logInfo(LOG_TAG, "The termux prefix directory \"" + TERMUX_PREFIX_DIR_PATH + "\" does not exist but another file exists at its destination.");
         }
 
-        final EditText taskEditText = new EditText(activity);
-        String archName = determineTermuxArchName();
-        taskEditText.setHint(defaultBootstrapURL);
-        taskEditText.setText(defaultBootstrapURL);
-
-        AlertDialog dialog = new AlertDialog.Builder(activity)
-            .setTitle("Bootstrap zipball location")
-            .setMessage("Enter the URL of a directory containing bootstrap-" + archName + ".zip")
-            .setView(taskEditText)
-            .setPositiveButton("OK", new DialogInterface.OnClickListener() {
-                @Override
-                public void onClick(DialogInterface dialog, int which) {
-                    String bootstrapURL = String.valueOf(taskEditText.getText());
-                    restOfSetupIfNeeded(activity, whenDone, bootstrapURL);
-                }
-            })
-            .create();
-
-        dialog.show();
+        restOfSetupIfNeeded(activity, whenDone);
     }
 
-    static void restOfSetupIfNeeded(final Activity activity, final Runnable whenDone, String bootstrapURL) {
-
-        final ProgressDialog progress = ProgressDialog.show(activity, null, activity.getString(R.string.bootstrap_installer_body), true, false);
+    static void restOfSetupIfNeeded(
+        final Activity activity,
+        final Runnable whenDone
+    ) {
         new Thread() {
             @Override
             public void run() {
                 try {
                     Logger.logInfo(LOG_TAG, "Installing " + TermuxConstants.TERMUX_APP_NAME + " bootstrap packages.");
+                    PlatformDiagnostics.record(
+                        activity,
+                        "BOOTSTRAP",
+                        "Installing bundled pinned runtime asset "
+                            + BuildConfig.BOOTSTRAP_ASSET
+                    );
 
                     Error error;
 
@@ -185,8 +186,17 @@ final class TermuxInstaller {
                     final List<Pair<String, String>> symlinks = new ArrayList<>(50);
                     final List<String> executables = new ArrayList<>(128);
 
-                    final URL zipUrl = determineZipUrl(bootstrapURL);
-                    try (ZipInputStream zipInput = new ZipInputStream(zipUrl.openStream())) {
+                    File downloadedZip = loadBundledBootstrap(
+                        activity,
+                        BuildConfig.BOOTSTRAP_ASSET,
+                        BuildConfig.BOOTSTRAP_SHA256
+                    );
+                    PlatformDiagnostics.record(
+                        activity,
+                        "BOOTSTRAP",
+                        "Extracting verified archive (" + downloadedZip.length() + " bytes)"
+                    );
+                    try (ZipInputStream zipInput = new ZipInputStream(new FileInputStream(downloadedZip))) {
                         ZipEntry zipEntry;
                         while ((zipEntry = zipInput.getNextEntry()) != null) {
                             if (zipEntry.getName().equals("SYMLINKS.txt")) {
@@ -197,12 +207,16 @@ final class TermuxInstaller {
                                     if (parts.length != 2)
                                         throw new RuntimeException("Malformed symlink line: " + line);
                                     String oldPath = parts[0];
-                                    String newPath = TERMUX_STAGING_PREFIX_DIR_PATH + "/" + parts[1];
+                                    String newPath = safeStagingPath(parts[1]).getAbsolutePath();
                                     symlinks.add(Pair.create(oldPath, newPath));
 
                                     error = ensureDirectoryExists(new File(newPath).getParentFile());
                                     if (error != null) {
-                                        showBootstrapErrorDialog(activity, whenDone, Error.getErrorMarkdownString(error));
+                                        showBootstrapErrorDialog(
+                                            activity,
+                                            whenDone,
+                                            Error.getErrorMarkdownString(error)
+                                        );
                                         return;
                                     }
                                 }
@@ -214,12 +228,16 @@ final class TermuxInstaller {
                                 }
                             } else {
                                 String zipEntryName = zipEntry.getName();
-                                File targetFile = new File(TERMUX_STAGING_PREFIX_DIR_PATH, zipEntryName);
+                                File targetFile = safeStagingPath(zipEntryName);
                                 boolean isDirectory = zipEntry.isDirectory();
 
                                 error = ensureDirectoryExists(isDirectory ? targetFile : targetFile.getParentFile());
                                 if (error != null) {
-                                    showBootstrapErrorDialog(activity, whenDone, Error.getErrorMarkdownString(error));
+                                    showBootstrapErrorDialog(
+                                        activity,
+                                        whenDone,
+                                        Error.getErrorMarkdownString(error)
+                                    );
                                     return;
                                 }
 
@@ -237,15 +255,19 @@ final class TermuxInstaller {
                                 }
                             }
                         }
+                    } finally {
+                        if (!downloadedZip.delete()) {
+                            Logger.logWarn(LOG_TAG, "Unable to delete downloaded bootstrap archive");
+                        }
                     }
 
                     if (!executables.isEmpty()) {
                         for (String executable : executables) {
                             //noinspection OctalInteger
                             try {
-                                Os.chmod(TERMUX_STAGING_PREFIX_DIR + "/" + executable, 0700);
+                                Os.chmod(safeStagingPath(executable).getAbsolutePath(), 0700);
                             } catch (Throwable t) {
-                                Logger.logError(LOG_TAG, "EXECUTABLES error: " + TERMUX_STAGING_PREFIX_DIR + "/" + executable + t);
+                                Logger.logError(LOG_TAG, "Invalid EXECUTABLES entry: " + executable + ": " + t);
                             }
                         }
                     } else {
@@ -257,6 +279,7 @@ final class TermuxInstaller {
                     for (Pair<String, String> symlink : symlinks) {
                         Os.symlink(symlink.first, symlink.second);
                     }
+                    prepareBundledRuntimeLauncher();
 
                     Logger.logInfo(LOG_TAG, "Moving termux prefix staging to prefix directory.");
 
@@ -265,6 +288,11 @@ final class TermuxInstaller {
                     }
 
                     Logger.logInfo(LOG_TAG, "Bootstrap packages installed successfully.");
+                    PlatformDiagnostics.record(
+                        activity,
+                        "BOOTSTRAP",
+                        "Nix-on-Droid runtime installed successfully"
+                    );
 
                     // Recreate env file since termux prefix was wiped earlier
                     TermuxShellEnvironment.writeEnvironmentToFile(activity);
@@ -272,22 +300,23 @@ final class TermuxInstaller {
                     activity.runOnUiThread(whenDone);
 
                 } catch (final Exception e) {
-                    showBootstrapErrorDialog(activity, whenDone, Logger.getStackTracesMarkdownString(null, Logger.getStackTracesStringArray(e)));
-
-                } finally {
-                    activity.runOnUiThread(() -> {
-                        try {
-                            progress.dismiss();
-                        } catch (RuntimeException e) {
-                            // Activity already dismissed - ignore.
-                        }
-                    });
+                    PlatformDiagnostics.record(
+                        activity,
+                        "ERROR",
+                        "Bootstrap failed: " + e.getClass().getSimpleName() + ": " + e.getMessage()
+                    );
+                    showBootstrapErrorDialog(activity, whenDone,
+                        Logger.getStackTracesMarkdownString(null, Logger.getStackTracesStringArray(e)));
                 }
             }
         }.start();
     }
 
-    public static void showBootstrapErrorDialog(Activity activity, Runnable whenDone, String message) {
+    private static void showBootstrapErrorDialog(
+        Activity activity,
+        Runnable whenDone,
+        String message
+    ) {
         Logger.logErrorExtended(LOG_TAG, "Bootstrap Error:\n" + message);
 
         // Send a notification with the exception so that the user knows why bootstrap setup failed
@@ -303,7 +332,7 @@ final class TermuxInstaller {
                     .setPositiveButton(R.string.bootstrap_error_try_again, (dialog, which) -> {
                         dialog.dismiss();
                         FileUtils.deleteFile("termux prefix directory", TERMUX_PREFIX_DIR_PATH, true);
-                        TermuxInstaller.setupBootstrapIfNeeded(activity, whenDone);
+                        TermuxInstaller.restOfSetupIfNeeded(activity, whenDone);
                     }).show();
             } catch (WindowManager.BadTokenException e1) {
                 // Activity already dismissed - ignore.
@@ -423,30 +452,152 @@ final class TermuxInstaller {
         return FileUtils.createDirectoryFile(directory.getAbsolutePath());
     }
 
-    /** Get bootstrap zip url for this systems cpu architecture. */
-    private static URL determineZipUrl(String bootstrapURL) throws MalformedURLException {
-        String archName = determineTermuxArchName();
-        return new URL(bootstrapURL + "/bootstrap-" + archName + ".zip");
+    private static void prepareBundledRuntimeLauncher() throws Exception {
+        File uninitialised = safeStagingPath("etc/UNINTIALISED");
+        if (Files.exists(uninitialised.toPath(), LinkOption.NOFOLLOW_LINKS)
+            && !uninitialised.delete()) {
+            throw new IllegalStateException("Unable to disable the network Nix-on-Droid initializer");
+        }
+
+        File nixStoreBinary = findNixStoreBinary(
+            safeStagingPath("nix/store")
+        );
+        File stableNixStoreBinary = safeStagingPath("bin/nix-store");
+        if (Files.exists(stableNixStoreBinary.toPath(), LinkOption.NOFOLLOW_LINKS)
+            && !stableNixStoreBinary.delete()) {
+            throw new IllegalStateException("Unable to replace the bootstrap nix-store launcher");
+        }
+        String prootTarget = "/nix/store/" + nixStoreBinary.getParentFile().getParentFile().getName()
+            + "/bin/nix-store";
+        Os.symlink(prootTarget, stableNixStoreBinary.getAbsolutePath());
+
+        File loginInner = safeStagingPath("usr/lib/login-inner");
+        String launcher = "set -euo pipefail\n"
+            + "export HOME=" + TermuxConstants.TERMUX_HOME_DIR_PATH + "\n"
+            + "export USER=nix-on-droid\n"
+            + "export PATH=/bin:/usr/bin\n"
+            + "export NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt\n"
+            + "exec -a bash /bin/sh\n";
+        try (FileOutputStream output = new FileOutputStream(loginInner, false)) {
+            output.write(launcher.getBytes(StandardCharsets.UTF_8));
+            output.getFD().sync();
+        }
+        Os.chmod(loginInner.getAbsolutePath(), 0700);
     }
 
-    private static String determineTermuxArchName() {
-        // Note that we cannot use System.getProperty("os.arch") since that may give e.g. "aarch64"
-        // while a 64-bit runtime may not be installed (like on the Samsung Galaxy S5 Neo).
-        // Instead we search through the supported abi:s on the device, see:
-        // http://developer.android.com/ndk/guides/abis.html
-        // Note that we search for abi:s in preferred order (the ordering of the
-        // Build.SUPPORTED_ABIS list) to avoid e.g. installing arm on an x86 system where arm
-        // emulation is available.
-        for (String androidArch : Build.SUPPORTED_ABIS) {
-            switch (androidArch) {
-                case "arm64-v8a": return "aarch64";
-                case "armeabi-v7a": return "arm";
-                case "x86_64": return "x86_64";
-                case "x86": return "i686";
+    static File findNixStoreBinary(File storeDirectory) {
+        File[] storePaths = storeDirectory == null ? null : storeDirectory.listFiles();
+        File result = null;
+        if (storePaths != null) {
+            for (File storePath : storePaths) {
+                File candidate = new File(storePath, "bin/nix-store");
+                if (!candidate.isFile()) continue;
+                if (result != null) {
+                    throw new IllegalStateException("Bootstrap contains multiple nix-store executables");
+                }
+                result = candidate;
             }
         }
-        throw new RuntimeException("Unable to determine arch from Build.SUPPORTED_ABIS =  " +
-            Arrays.toString(Build.SUPPORTED_ABIS));
+        if (result == null) {
+            throw new IllegalStateException("Bootstrap does not contain nix-store");
+        }
+        return result;
+    }
+
+    private static File loadBundledBootstrap(
+        Activity activity,
+        String assetPath,
+        String expectedSha256
+    ) throws Exception {
+        PlatformDiagnostics.record(
+            activity,
+            "BOOTSTRAP",
+            "Reading embedded bootstrap asset " + assetPath
+        );
+        return stageBootstrap(
+            activity,
+            activity.getAssets().open(assetPath),
+            expectedSha256,
+            BuildConfig.BOOTSTRAP_ARCHIVE_MAX_BYTES
+        );
+    }
+
+    private static File stageBootstrap(
+        Activity activity,
+        InputStream source,
+        String expectedSha256,
+        long maximumBytes
+    ) throws Exception {
+        File archive = File.createTempFile("nix-bootstrap-", ".zip", activity.getCacheDir());
+        long total;
+        try {
+            total = copyVerifiedBootstrap(source, archive, expectedSha256, maximumBytes);
+        } catch (Exception error) {
+            //noinspection ResultOfMethodCallIgnored
+            archive.delete();
+            throw error;
+        }
+        PlatformDiagnostics.record(
+            activity,
+            "BOOTSTRAP",
+            "Bootstrap verified: " + total + " bytes, SHA-256 " + expectedSha256
+        );
+        return archive;
+    }
+
+    static long copyVerifiedBootstrap(
+        InputStream source,
+        File archive,
+        String expectedSha256,
+        long maximumBytes
+    ) throws Exception {
+        if (maximumBytes <= 0) throw new IllegalArgumentException("Bootstrap size limit must be positive");
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        long total = 0;
+        try (
+            InputStream input = new DigestInputStream(source, digest);
+            FileOutputStream output = new FileOutputStream(archive)
+        ) {
+            byte[] buffer = new byte[64 * 1024];
+            int count;
+            while ((count = input.read(buffer)) != -1) {
+                total += count;
+                if (total > maximumBytes) {
+                    throw new SecurityException("Bootstrap archive exceeds configured size limit");
+                }
+                output.write(buffer, 0, count);
+            }
+            output.getFD().sync();
+        } catch (Exception error) {
+            //noinspection ResultOfMethodCallIgnored
+            archive.delete();
+            throw error;
+        }
+        String actualSha256 = toHex(digest.digest());
+        if (expectedSha256 != null && !expectedSha256.equalsIgnoreCase(actualSha256)) {
+            //noinspection ResultOfMethodCallIgnored
+            archive.delete();
+            throw new SecurityException("Bootstrap checksum verification failed");
+        }
+        return total;
+    }
+
+    static File safeStagingPath(String relativePath) throws Exception {
+        if (relativePath == null || relativePath.isEmpty() || relativePath.startsWith("/")) {
+            throw new SecurityException("Invalid bootstrap archive path");
+        }
+        File target = new File(TERMUX_STAGING_PREFIX_DIR, relativePath);
+        String root = TERMUX_STAGING_PREFIX_DIR.getCanonicalPath() + File.separator;
+        if (!target.getCanonicalPath().startsWith(root)) {
+            throw new SecurityException("Bootstrap archive path escapes the staging directory");
+        }
+        return target;
+    }
+
+    private static String toHex(byte[] value) {
+        StringBuilder text = new StringBuilder(value.length * 2);
+        for (byte item : value) text.append(String.format("%02x", item & 0xff));
+        return text.toString();
     }
 
 }

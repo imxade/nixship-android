@@ -3,22 +3,10 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <!--
-        Updated notification icon compliant with system icons guidelines
-        https://material.io/design/iconography/system-icons.html
-    -->
-
-    <group>
-        <clip-path
-            android:pathData="M0,0h24v24h-24z"/>
-
-        <path
-            android:pathData="M5,4H2L8,12L2,20H5L11,12L5,4Z"
-            android:fillColor="#ffffff"/>
-
-        <path
-            android:pathData="M13,18H22V20H13V18Z"
-            android:fillColor="#ffffff"/>
-
-    </group>
+    <path
+        android:fillColor="#ffffff"
+        android:pathData="M4,20V4h4l8,10V4h4v16h-4L8,10v10z" />
+    <path
+        android:fillColor="#ffffff"
+        android:pathData="M10.5,2a1.5,1.5 0,1 0,3 0a1.5,1.5 0,1 0,-3 0M1,20.5a1.5,1.5 0,1 0,3 0a1.5,1.5 0,1 0,-3 0M20,20.5a1.5,1.5 0,1 0,3 0a1.5,1.5 0,1 0,-3 0" />
 </vector>

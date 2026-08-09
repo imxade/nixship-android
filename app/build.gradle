@@ -2,6 +2,23 @@ plugins {
     id "com.android.application"
 }
 
+import groovy.json.JsonSlurper
+
+def productConfig = new JsonSlurper().parse(rootProject.file("config/product.json"))
+def targetAbi = System.getenv("ANDROID_ABI") ?: productConfig.android.abi
+def bootstrapSha256 = productConfig.bootstrap.embeddedSha256ByAndroidAbi[targetAbi]
+def bootstrapArchiveName = productConfig.bootstrap.archiveNameByAndroidAbi[targetAbi]
+def runtimeSystem = productConfig.runtime.nixSystemByAndroidAbi[targetAbi]
+if (!bootstrapSha256) {
+    throw new GradleException("No pinned bootstrap checksum is configured for ABI " + targetAbi)
+}
+if (!runtimeSystem) {
+    throw new GradleException("No Nix runtime system is configured for ABI " + targetAbi)
+}
+if (!bootstrapArchiveName) {
+    throw new GradleException("No pinned bootstrap archive is configured for ABI " + targetAbi)
+}
+
 ext {
     // The packageVariant defines the bootstrap variant that will be included in the app APK.
     // This must be supported by com.termux.shared.termux.TermuxBootstrap.PackageVariant or app will
@@ -13,8 +30,15 @@ ext {
 }
 
 android {
-    compileSdkVersion project.properties.compileSdkVersion.toInteger()
-    ndkVersion = System.getenv("JITPACK_NDK_VERSION") ?: project.properties.ndkVersion
+    compileSdkVersion productConfig.android.compileSdk as Integer
+    ndkVersion = System.getenv("JITPACK_NDK_VERSION") ?: productConfig.android.ndkVersion
+    aaptOptions {
+        // The Nix closure is already reproducibly gzip-compressed. Recompressing it wastes heap
+        // and cannot reduce the APK meaningfully.
+        // AAPT transparently expands .gz assets and strips their suffix. Use a
+        // neutral extension and explicitly store the already-compressed archive.
+        noCompress "bundle", "zip"
+    }
     def appVersionName = System.getenv("TERMUX_APP_VERSION_NAME") ?: ""
     def apkVersionTag = System.getenv("TERMUX_APK_VERSION_TAG") ?: ""
     def splitAPKsForDebugBuilds = System.getenv("TERMUX_SPLIT_APKS_FOR_DEBUG_BUILDS") ?: "1"
@@ -39,26 +63,51 @@ android {
 
     // NIX-ON-DROID: Downstream version.
     defaultConfig {
-        applicationId "com.termux"
-        applicationIdSuffix ".nix"
-        versionCode 188037
-        versionName "0.118.0_v0.3.7_nix"
+        applicationId productConfig.android.applicationId
+        versionCode productConfig.android.versionCode as Integer
+        versionName productConfig.android.versionName
         // fdroid checkupdates looks for literal versionCode/versionName,
         // can't get fancy with these and use string interpolation and similar
         ndk {
-          abiFilters 'arm64-v8a', 'x86_64'
+          abiFilters targetAbi
         }
 
-        minSdkVersion project.properties.minSdkVersion.toInteger()
-        targetSdkVersion project.properties.targetSdkVersion.toInteger()
+        minSdkVersion productConfig.android.minSdk as Integer
+        targetSdkVersion productConfig.android.targetSdk as Integer
 
         if (appVersionName) versionName = appVersionName
         //validateVersionName(versionName)
 
         buildConfigField "String", "TERMUX_PACKAGE_VARIANT", "\"" + project.ext.packageVariant + "\"" // Used by TermuxApplication class
+        buildConfigField "String", "BOOTSTRAP_ASSET", "\"${productConfig.bootstrap.assetDirectory}/${productConfig.bootstrap.assetName}\""
+        buildConfigField "String", "BOOTSTRAP_SHA256", "\"${bootstrapSha256}\""
+        buildConfigField "long", "BOOTSTRAP_ARCHIVE_MAX_BYTES", "${productConfig.bootstrap.archiveMaxBytes}L"
+        buildConfigField "String", "CONTROL_PLANE_ASSET", "\"${productConfig.controlPlane.assetDirectory}\""
+        buildConfigField "String", "CONTROL_PLANE_REPOSITORY", "\"${productConfig.controlPlane.repositoryUrl}\""
+        buildConfigField "String", "CONTROL_PLANE_BRANCH", "\"${productConfig.controlPlane.branch}\""
+        buildConfigField "String", "CONTROL_PLANE_REVISION", "\"${productConfig.controlPlane.revision}\""
+        buildConfigField "String", "RUNTIME_SYSTEM", "\"${runtimeSystem}\""
+        buildConfigField "String", "NIX_CONFIG", "\"${productConfig.runtime.nixConfig}\""
+        buildConfigField "long", "RUNTIME_ARCHIVE_MAX_BYTES", "${productConfig.runtime.archiveMaxBytes}L"
+        buildConfigField "String", "SERVER_BIND_ADDRESS", "\"${productConfig.server.bindAddress}\""
+        buildConfigField "int", "SERVER_PORT", "${productConfig.server.port}"
+        buildConfigField "boolean", "ALLOW_NODE_INTERFACE_DISCOVERY", "${productConfig.server.allowNodeInterfaceDiscovery}"
+        buildConfigField "String", "LOOPBACK_HOST", "\"${productConfig.webView.loopbackHost}\""
+        buildConfigField "String", "HEALTH_PATH", "\"${productConfig.webView.healthPath}\""
+        buildConfigField "String", "SETUP_CLAIM_PATH", "\"${productConfig.webView.setupClaimPath}\""
+        buildConfigField "String", "QUICK_TUNNEL_HOST_SUFFIX", "\"${productConfig.webView.quickTunnelHostSuffix}\""
+        buildConfigField "long", "POLL_INTERVAL_MILLIS", "${productConfig.webView.pollIntervalMillis}L"
+        buildConfigField "int", "STARTUP_TIMEOUT_SECONDS", "${productConfig.webView.startupTimeoutSeconds}"
+        buildConfigField "int", "SETUP_TOKEN_MIN_CHARACTERS", "${productConfig.webView.setupTokenMinCharacters}"
+        buildConfigField "int", "SETUP_TOKEN_MAX_BYTES", "${productConfig.webView.setupTokenMaxBytes}"
+        buildConfigField "long", "DIAGNOSTICS_REFRESH_MILLIS", "${productConfig.diagnostics.refreshIntervalMillis}L"
+        buildConfigField "int", "DIAGNOSTICS_STALLED_SECONDS", "${productConfig.diagnostics.stalledAfterSeconds}"
+        buildConfigField "int", "DIAGNOSTICS_EVENT_LOG_MAX_BYTES", "${productConfig.diagnostics.eventLogMaxBytes}"
+        buildConfigField "int", "DIAGNOSTICS_DISPLAY_TAIL_BYTES", "${productConfig.diagnostics.displayTailBytes}"
+        buildConfigField "int", "DIAGNOSTICS_PROCESS_EXIT_TAIL_CHARACTERS", "${productConfig.diagnostics.processExitTailCharacters}"
 
-        manifestPlaceholders.TERMUX_PACKAGE_NAME = "com.termux.nix"
-        manifestPlaceholders.TERMUX_APP_NAME = "Nix"
+        manifestPlaceholders.TERMUX_PACKAGE_NAME = productConfig.android.applicationId
+        manifestPlaceholders.TERMUX_APP_NAME = productConfig.android.appName
         manifestPlaceholders.TERMUX_API_APP_NAME = "Termux:API"
         manifestPlaceholders.TERMUX_BOOT_APP_NAME = "Termux:Boot"
         manifestPlaceholders.TERMUX_FLOAT_APP_NAME = "Termux:Float"
@@ -86,7 +135,7 @@ android {
         splits {
             abi {
                 reset ()
-                include 'arm64-v8a'
+                include targetAbi
                 universalApk false
             }
         }
@@ -99,6 +148,14 @@ android {
             storePassword 'xrj45yWGLbsO7W0v'
             keyPassword 'xrj45yWGLbsO7W0v'
         }
+        if (System.getenv("ANDROID_RELEASE_KEYSTORE")) {
+            release {
+                storeFile file(System.getenv("ANDROID_RELEASE_KEYSTORE"))
+                storePassword System.getenv("ANDROID_RELEASE_STORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_RELEASE_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_RELEASE_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -106,6 +163,9 @@ android {
             minifyEnabled true
             shrinkResources false // Reproducible builds
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (System.getenv("ANDROID_RELEASE_KEYSTORE")) {
+                signingConfig signingConfigs.release
+            }
         }
 
         debug {
@@ -149,10 +209,10 @@ android {
         variant.outputs.all { output ->
             if (variant.buildType.name == "debug") {
                 def abi = output.getFilter(com.android.build.OutputFile.ABI)
-                outputFileName = new File("termux-app_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "debug") + "_" + (abi ? abi : "universal") + ".apk")
+                outputFileName = new File("nixship-android_" + (apkVersionTag ? apkVersionTag : "debug") + "_" + (abi ? abi : targetAbi) + ".apk")
             } else if (variant.buildType.name == "release") {
                 def abi = output.getFilter(com.android.build.OutputFile.ABI)
-                outputFileName = new File("termux-app_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "release") + "_" + (abi ? abi : "universal") + ".apk")
+                outputFileName = new File("nixship-android_" + (apkVersionTag ? apkVersionTag : "release") + "_" + (abi ? abi : targetAbi) + ".apk")
             }
         }
     }
@@ -177,83 +237,3 @@ def validateVersionName(String versionName) {
     if (!java.util.regex.Pattern.matches("^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-((?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+([0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?\$", versionName))
         throw new GradleException("The versionName '"  + versionName + "' is not a valid version as per semantic version '2.0.0' spec in the format 'major.minor.patch(-prerelease)(+buildmetadata)'. https://semver.org/spec/v2.0.0.html.")
 }
-
-def downloadBootstrap(String arch, String expectedChecksum, String version) {
-    def digest = java.security.MessageDigest.getInstance("SHA-256")
-
-    def localUrl = "src/main/cpp/bootstrap-" + arch + ".zip"
-    def file = new File(projectDir, localUrl)
-    if (file.exists()) {
-        def buffer = new byte[8192]
-        def input = new FileInputStream(file)
-        while (true) {
-            def readBytes = input.read(buffer)
-            if (readBytes < 0) break
-            digest.update(buffer, 0, readBytes)
-        }
-        def checksum = new BigInteger(1, digest.digest()).toString(16)
-        while (checksum.length() < 64) { checksum = "0" + checksum }
-        if (checksum == expectedChecksum) {
-            return
-        } else {
-            logger.quiet("Deleting old local file with wrong hash: " + localUrl + ": expected: " + expectedChecksum + ", actual: " + checksum)
-            file.delete()
-        }
-    }
-
-    def remoteUrl = "https://github.com/termux/termux-packages/releases/download/bootstrap-" + version + "/bootstrap-" + arch + ".zip"
-    logger.quiet("Downloading " + remoteUrl + " ...")
-
-    file.parentFile.mkdirs()
-    def out = new BufferedOutputStream(new FileOutputStream(file))
-
-    def connection = new URL(remoteUrl).openConnection()
-    connection.setInstanceFollowRedirects(true)
-    def digestStream = new java.security.DigestInputStream(connection.inputStream, digest)
-    out << digestStream
-    out.close()
-
-    def checksum = new BigInteger(1, digest.digest()).toString(16)
-    while (checksum.length() < 64) { checksum = "0" + checksum }
-    if (checksum != expectedChecksum) {
-        file.delete()
-        throw new GradleException("Wrong checksum for " + remoteUrl + ": expected: " + expectedChecksum + ", actual: " + checksum)
-    }
-}
-
-clean {
-    doLast {
-        def tree = fileTree(new File(projectDir, 'src/main/cpp'))
-        tree.include 'bootstrap-*.zip'
-        tree.each { it.delete() }
-    }
-}
-
-/* NIX-ON-DROID: Unused
-task downloadBootstraps() {
-    doLast {
-        def packageVariant = project.ext.packageVariant
-        if (packageVariant == "apt-android-7") {
-            def version = "2022.04.28-r5" + "+" + packageVariant
-            downloadBootstrap("aarch64", "4a51a7eb209fe82efc24d52e3cccc13165f27377290687cb82038cbd8e948430", version)
-            downloadBootstrap("arm", "6459a786acbae50d4c8a36fa1c3de6a4dd2d482572f6d54f73274709bd627325", version)
-            downloadBootstrap("i686", "919d212b2f19e08600938db4079e794e947365022dbfd50ac342c50fcedcd7be", version)
-            downloadBootstrap("x86_64", "61b02fdc03ea4f5d9da8d8cf018013fdc6659e6da6cbf44e9b24d1c623580b89", version)
-        } else if (packageVariant == "apt-android-5") {
-            def version = "2022.04.28-r6" + "+" + packageVariant
-            downloadBootstrap("aarch64", "913609d439415c828c5640be1b0561467e539cb1c7080662decaaca2fb4820e7", version)
-            downloadBootstrap("arm", "26bfb45304c946170db69108e5eb6e3641aad751406ce106c80df80cad2eccf8", version)
-            downloadBootstrap("i686", "46dcfeb5eef67ba765498db9fe4c50dc4690805139aa0dd141a9d8ee0693cd27", version)
-            downloadBootstrap("x86_64", "615b590679ee6cd885b7fd2ff9473c845e920f9b422f790bb158c63fe42b8481", version)
-        } else {
-            throw new GradleException("Unsupported TERMUX_PACKAGE_VARIANT \"" + packageVariant + "\"")
-        }
-    }
-}
-
-afterEvaluate {
-    android.applicationVariants.all { variant ->
-        variant.javaCompileProvider.get().dependsOn(downloadBootstraps)
-    }
-}
-*/

@@ -18,6 +18,7 @@ import android.os.PowerManager;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.termux.BuildConfig;
 import com.termux.R;
 import com.termux.app.event.SystemEventReceiver;
 import com.termux.app.terminal.TermuxTerminalSessionActivityClient;
@@ -50,6 +51,7 @@ import com.termux.terminal.TerminalSession;
 import com.termux.terminal.TerminalSessionClient;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 
 /**
@@ -154,6 +156,19 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
                     Logger.logDebug(LOG_TAG, "ACTION_SERVICE_EXECUTE intent received");
                     actionServiceExecute(intent);
                     break;
+                case PlatformRuntime.ACTION_START:
+                    Logger.logDebug(LOG_TAG, "Nix Ship runtime start requested");
+                    actionAcquireWakeLock();
+                    try {
+                        PlatformRuntime.start(this);
+                    } catch (Exception error) {
+                        Logger.logStackTraceWithMessage(
+                            LOG_TAG,
+                            "Unable to start the Nix Ship runtime",
+                            error
+                        );
+                    }
+                    break;
                 default:
                     Logger.logError(LOG_TAG, "Invalid action: \"" + action + "\"");
                     break;
@@ -162,7 +177,19 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
 
         // If this service really do get killed, there is no point restarting it automatically - let the user do on next
         // start of {@link Term):
-        return Service.START_NOT_STICKY;
+        if (intent == null) {
+            try {
+                actionAcquireWakeLock();
+                PlatformRuntime.start(this);
+            } catch (Exception error) {
+                Logger.logStackTraceWithMessage(
+                    LOG_TAG,
+                    "Unable to restore the Nix Ship runtime",
+                    error
+                );
+            }
+        }
+        return Service.START_STICKY;
     }
 
     @Override
@@ -319,10 +346,6 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         mWifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, TermuxConstants.TERMUX_APP_NAME.toLowerCase());
         mWifiLock.acquire();
 
-        if (!PermissionUtils.checkIfBatteryOptimizationsDisabled(this)) {
-            PermissionUtils.requestDisableBatteryOptimizations(this);
-        }
-
         updateNotification();
 
         Logger.logDebug(LOG_TAG, "WakeLocks acquired successfully");
@@ -463,6 +486,15 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
     /** Create a TermuxTask. */
     @Nullable
     public synchronized AppShell createTermuxTask(ExecutionCommand executionCommand) {
+        return createTermuxTask(executionCommand, null);
+    }
+
+    /** Create a TermuxTask with additional process environment supplied by trusted in-app code. */
+    @Nullable
+    public synchronized AppShell createTermuxTask(
+        ExecutionCommand executionCommand,
+        HashMap<String, String> additionalEnvironment
+    ) {
         if (executionCommand == null) return null;
 
         Logger.logDebug(LOG_TAG, "Creating \"" + executionCommand.getCommandIdAndLabelLogString() + "\" TermuxTask");
@@ -478,7 +510,7 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
             Logger.logVerboseExtended(LOG_TAG, executionCommand.toString());
 
         AppShell newTermuxTask = AppShell.execute(this, executionCommand, this,
-            new TermuxShellEnvironment(), null,false);
+            new TermuxShellEnvironment(), additionalEnvironment,false);
         if (newTermuxTask == null) {
             Logger.logError(LOG_TAG, "Failed to execute new TermuxTask command for:\n" + executionCommand.getCommandIdAndLabelLogString());
             // If the execution command was started for a plugin, then process the error
@@ -503,12 +535,58 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         return newTermuxTask;
     }
 
+    /** Starts one named background task, ignoring duplicate requests while it remains alive. */
+    public synchronized void startPlatformTask(
+        String shellName,
+        String executablePath,
+        String[] arguments,
+        String workingDirectory,
+        HashMap<String, String> additionalEnvironment
+    ) {
+        if (getTermuxTaskForShellName(shellName) != null) return;
+        ExecutionCommand command = new ExecutionCommand(
+            TermuxShellManager.getNextShellId(),
+            executablePath,
+            arguments,
+            null,
+            workingDirectory,
+            Runner.APP_SHELL.getName(),
+            false
+        );
+        command.shellName = shellName;
+        command.commandLabel = TermuxConstants.TERMUX_APP_NAME;
+        createTermuxTask(command, additionalEnvironment);
+    }
+
     /** Callback received when a TermuxTask finishes. */
     @Override
     public void onAppShellExited(final AppShell termuxTask) {
         mHandler.post(() -> {
             if (termuxTask != null) {
                 ExecutionCommand executionCommand = termuxTask.getExecutionCommand();
+                if (executionCommand != null
+                    && executionCommand.shellName != null
+                    && executionCommand.shellName.startsWith("control-plane")) {
+                    Integer exitCode = executionCommand.resultData.exitCode;
+                    String processOutput = PlatformDiagnostics.processExitOutput(
+                        executionCommand.resultData.stderr,
+                        executionCommand.resultData.stdout,
+                        BuildConfig.DIAGNOSTICS_PROCESS_EXIT_TAIL_CHARACTERS
+                    );
+                    if (processOutput != null) {
+                        PlatformDiagnostics.record(
+                            this,
+                            "PROCESS",
+                            "Final child output: " + processOutput
+                        );
+                    }
+                    PlatformDiagnostics.record(
+                        this,
+                        exitCode != null && exitCode == 0 ? "PROCESS" : "ERROR",
+                        "Task " + executionCommand.shellName + " exited with "
+                            + PlatformDiagnostics.describeExit(exitCode)
+                    );
+                }
 
                 Logger.logVerbose(LOG_TAG, "The onTermuxTaskExited() callback called for \"" + executionCommand.getCommandIdAndLabelLogString() + "\" TermuxTask command");
 
@@ -783,8 +861,13 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         Resources res = getResources();
 
         // Set pending intent to be launched when notification is clicked
-        Intent notificationIntent = TermuxActivity.newInstance(this);
-        PendingIntent contentIntent = PendingIntent.getActivity(this, 0, notificationIntent, 0);
+        Intent notificationIntent = new Intent(this, PlatformActivity.class);
+        PendingIntent contentIntent = PendingIntent.getActivity(
+            this,
+            0,
+            notificationIntent,
+            PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT
+        );
 
 
         // Set notification text
@@ -827,7 +910,11 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
 
         // Set Exit button action
         Intent exitIntent = new Intent(this, TermuxService.class).setAction(TERMUX_SERVICE.ACTION_STOP_SERVICE);
-        builder.addAction(android.R.drawable.ic_delete, res.getString(R.string.notification_action_exit), PendingIntent.getService(this, 0, exitIntent, 0));
+        builder.addAction(
+            android.R.drawable.ic_delete,
+            res.getString(R.string.notification_action_exit),
+            PendingIntent.getService(this, 1, exitIntent, PendingIntent.FLAG_IMMUTABLE)
+        );
 
 
         // Set Wakelock button actions
@@ -835,7 +922,11 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         Intent toggleWakeLockIntent = new Intent(this, TermuxService.class).setAction(newWakeAction);
         String actionTitle = res.getString(wakeLockHeld ? R.string.notification_action_wake_unlock : R.string.notification_action_wake_lock);
         int actionIcon = wakeLockHeld ? android.R.drawable.ic_lock_idle_lock : android.R.drawable.ic_lock_lock;
-        builder.addAction(actionIcon, actionTitle, PendingIntent.getService(this, 0, toggleWakeLockIntent, 0));
+        builder.addAction(
+            actionIcon,
+            actionTitle,
+            PendingIntent.getService(this, 2, toggleWakeLockIntent, PendingIntent.FLAG_IMMUTABLE)
+        );
 
 
         return builder.build();

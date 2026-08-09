@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="platform_preparing_runtime">Preparing the local Nix runtime…</string>
+    <string name="platform_verifying_runtime">Verifying and installing the Nix runtime…</string>
+    <string name="platform_starting_server">Starting the bundled Nix Ship server…</string>
+    <string name="platform_waiting_server">Waiting for the local Nix Ship server…</string>
+    <string name="platform_server_timeout">The local server did not become ready. Check battery restrictions, then retry.</string>
+    <string name="platform_service_blocked">Android prevented the hosting service from starting. Open the app again or remove battery restrictions.</string>
+    <string name="platform_page_error">The local dashboard could not be loaded.</string>
+    <string name="platform_webview_crashed">The Android web renderer stopped unexpectedly. Retry to reopen Nix Ship.</string>
+    <string name="platform_retry">Retry</string>
+    <string name="platform_diagnostics_title">Nix Ship startup diagnostics</string>
+    <string name="platform_diagnostics_waiting">Collecting exact runtime events…</string>
+    <string name="platform_copy_diagnostics">Copy diagnostics</string>
+    <string name="platform_share_diagnostics">Share diagnostics</string>
+    <string name="platform_diagnostics_copied">Diagnostics copied</string>
+    <string name="platform_no_share_target">No app is available to share diagnostics</string>
+</resources>

@@ -1,0 +1,107 @@
+{
+  "android": {
+    "applicationId": "com.termux.nixship",
+    "appName": "Nix Ship",
+    "launchActivity": "com.termux.app.PlatformActivity",
+    "versionCode": 14,
+    "versionName": "0.1.0-rc.14",
+    "minSdk": 26,
+    "targetSdk": 28,
+    "compileSdk": 35,
+    "buildToolsVersion": "35.0.0",
+    "legacyBuildToolsVersion": "30.0.3",
+    "ndkVersion": "22.1.7171670",
+    "abi": "arm64-v8a",
+    "emulatorAbi": "x86_64",
+    "emulatorApi": 35,
+    "emulatorMemoryMb": 4096,
+    "emulatorDataPartitionGb": 16,
+    "emulatorDisabledPackages": [
+      "com.google.android.apps.wellbeing",
+      "com.google.android.googlequicksearchbox"
+    ]
+  },
+  "branding": {
+    "owner": "Rituraj Basak",
+    "foregroundColor": "#000000",
+    "backgroundColor": "#FFFFFF"
+  },
+  "bootstrap": {
+    "baseUrl": "https://nix-on-droid.unboiled.info/bootstrap-release-24.05",
+    "upstreamApplicationId": "com.termux.nix",
+    "assetDirectory": "nix-bootstrap",
+    "assetName": "bootstrap.zip",
+    "archiveNameByAndroidAbi": {
+      "arm64-v8a": "bootstrap-aarch64.zip",
+      "x86_64": "bootstrap-x86_64.zip"
+    },
+    "upstreamSha256ByAndroidAbi": {
+      "arm64-v8a": "64afc02d670d9471d17c3da0747c10ef2cbc59e7e7578cc3e299a4a1532b237c",
+      "x86_64": "e091c4fc8b50de919f9df8753281b7ab247cd9c402274bb72845deb3caf8cb92"
+    },
+    "embeddedSha256ByAndroidAbi": {
+      "arm64-v8a": "83de99beea116d3c4c0c0149ec40e3a98e0dcaf7eadf75dd57f4e0e48172665c",
+      "x86_64": "d47a02686d5c7dc205fcb1e89135dd93f5ac05ba9e043ca37e8237f44604709f"
+    },
+    "archiveMaxBytes": 1073741824
+  },
+  "proot": {
+    "repositoryOwner": "termux",
+    "repositoryName": "proot",
+    "revision": "a89b3732ec6ae1db674510f0843b2f3db54d0a2f",
+    "sourceHash": "sha256-MwTd05uFjf7y9koc1Ruf4RZcy+LhQ9zslmSZjetZz9c=",
+    "tallocUrl": "https://www.samba.org/ftp/talloc/talloc-2.4.2.tar.gz",
+    "tallocHash": "sha256-hez55GXiD5j5lQpS6aQR4UMgvFVfolfYdpe356mx2KY=",
+    "androidApi": 26,
+    "tlsAlignmentBytes": 64,
+    "elfPageAlignmentBytes": 16384
+  },
+  "controlPlane": {
+    "repositoryUrl": "https://github.com/imxade/nixship.git",
+    "branch": "master",
+    "revision": "11f51c227be0eddaa3852b8f071ca900975c50cb",
+    "sourceHash": "sha256-RTJizsG81AkMWCamOth9TowTlCAYIFP6C8c+oGkDkDc=",
+    "assetDirectory": "control-plane"
+  },
+  "runtime": {
+    "nixSystemByAndroidAbi": {
+      "arm64-v8a": "aarch64-linux",
+      "x86_64": "x86_64-linux"
+    },
+    "nixConfig": "experimental-features = nix-command flakes",
+    "archiveMaxBytes": 1073741824
+  },
+  "server": {
+    "bindAddress": "0.0.0.0",
+    "port": 3001,
+    "allowNodeInterfaceDiscovery": false
+  },
+  "webView": {
+    "loopbackHost": "127.0.0.1",
+    "healthPath": "/api/health",
+    "setupClaimPath": "/api/setup/claim",
+    "quickTunnelHostSuffix": ".trycloudflare.com",
+    "pollIntervalMillis": 2000,
+    "startupTimeoutSeconds": 3600,
+    "setupTokenMinCharacters": 16,
+    "setupTokenMaxBytes": 256
+  },
+  "diagnostics": {
+    "refreshIntervalMillis": 1000,
+    "stalledAfterSeconds": 120,
+    "eventLogMaxBytes": 262144,
+    "displayTailBytes": 32768,
+    "processExitTailCharacters": 2048
+  },
+  "acceptance": {
+    "applicationName": "Kitsy",
+    "repositoryUrl": "https://github.com/imxade/kitsy.git",
+    "branch": "nixhost",
+    "flakeOutput": "default",
+    "readyText": "Your files, your browser.",
+    "deploymentTimeoutMillis": 1800000,
+    "quickTunnelTimeoutMillis": 300000,
+    "readyTimeoutMillis": 180000,
+    "statusReportIntervalSeconds": 60
+  }
+}

@@ -1,9 +1,7 @@
 version: 2
 updates:
-- package-ecosystem: github-actions
-  directory: /
-  schedule:
-    interval: daily
-  commit-message:
-    # Prefix all commit messages with "Changed: "
-    prefix: "Changed"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5

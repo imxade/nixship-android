@@ -42,3 +42,9 @@ Thumbs.db
 result
 result-*
 .direnv
+
+# Local physical-device test evidence
+/artifacts/
+
+# CI-generated release metadata
+config/build-info.json

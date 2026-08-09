@@ -1,13 +1,11 @@
 ---
-page_ref: /docs/apps/termux/index.html
+page_ref: /docs/apps/nixship/index.html
 ---
 
-# Termux App Docs
+# Nix Ship for Android
 
 <!--- DOC_HEADER_PLACEHOLDER -->
 
-Welcome to documentation for the [Termux App].
+Nix Ship turns an ARM64 Android device into a self-contained Nix application server and management client. Start with the repository README, then review the architecture, security, operations, and testing guides before sideloading a release.
 
 ##
-
-[Termux App]: https://github.com/termux/termux-app

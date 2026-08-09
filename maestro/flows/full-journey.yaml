@@ -1,0 +1,24 @@
+appId: ${APP_ID}
+name: Nix Ship account, password, deployment, and Quick Tunnel journey
+tags:
+  - physical
+  - end-to-end
+---
+- launchApp
+# Nix Ship asks from its visible activity before bootstrap begins. Waiting until
+# the service starts would let this system dialog cover a ready dashboard. Let
+# Android finish presenting the optional system dialog before checking for its
+# action; its title differs across Android builds.
+- waitForAnimationToEnd:
+    timeout: 5000
+- runFlow:
+    when:
+      visible: "Allow"
+    commands:
+      - tapOn: "Allow"
+- extendedWaitUntil:
+    visible: "Copy diagnostics"
+    timeout: 60000
+- tapOn: "Copy diagnostics"
+- assertVisible: "Diagnostics copied"
+- runFlow: account-deployment-journey.yaml
